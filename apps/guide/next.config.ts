@@ -23,15 +23,7 @@ export default withMDX({
 			fullUrl: true,
 		},
 	},
-	experimental: {
-		ppr: true,
-		reactCompiler: true,
-		useCache: true,
-		dynamicOnHover: true,
-	},
-	eslint: {
-		ignoreDuringBuilds: true,
-	},
+	reactCompiler: true,
 	typescript: {
 		ignoreBuildErrors: true,
 	},

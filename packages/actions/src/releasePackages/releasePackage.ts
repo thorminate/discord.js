@@ -18,20 +18,19 @@ async function checkRegistry(release: ReleaseEntry) {
 
 async function gitTagAndRelease(release: ReleaseEntry, dry: boolean) {
 	const tagName = `${release.name === 'discord.js' ? `` : `${release.name}@`}${release.version}`;
-	// Don't throw, if this exits non-zero it's probably because the tag already exists
-	await $`git tag ${tagName}`.nothrow();
 
 	if (dry) {
-		info(`[DRY] Tag "${tagName}" created, skipping push and release creation.`);
+		info(`[DRY] Release would be "${tagName}", skipping release creation.`);
 		return;
 	}
 
-	await $`git push origin ${tagName}`;
+	const commitHash = (await $`git rev-parse HEAD`.text()).trim();
 
 	try {
 		await octokit?.rest.repos.createRelease({
 			...context.repo,
 			tag_name: tagName,
+			target_commitish: commitHash,
 			name: tagName,
 			body: release.changelog ?? '',
 			generate_release_notes: release.changelog === undefined,
@@ -42,22 +41,23 @@ async function gitTagAndRelease(release: ReleaseEntry, dry: boolean) {
 	}
 }
 
-export async function releasePackage(release: ReleaseEntry, dev: boolean, dry: boolean) {
+export async function releasePackage(release: ReleaseEntry, dry: boolean, devTag?: string, doGitRelease = !devTag) {
 	// Sanity check against the registry first
 	if (await checkRegistry(release)) {
 		info(`${release.name}@${release.version} already published, skipping.`);
-		return;
+		return false;
 	}
 
 	if (dry) {
 		info(`[DRY] Releasing ${release.name}@${release.version}`);
 	} else {
-		await $`pnpm --filter=${release.name} publish --provenance --no-git-checks ${dev ? '--tag=dev' : ''}`;
+		await $`pnpm --filter=${release.name} publish --provenance --no-git-checks ${devTag ? `--tag=${devTag}` : ''}`;
 	}
 
-	if (!dev) await gitTagAndRelease(release, dry);
+	// && !devTag just to be sure
+	if (doGitRelease && !devTag) await gitTagAndRelease(release, dry);
 
-	if (dry) return;
+	if (dry) return true;
 
 	const before = performance.now();
 
@@ -77,11 +77,21 @@ export async function releasePackage(release: ReleaseEntry, dev: boolean, dry: b
 		}, 15_000);
 	});
 
-	if (dev) {
+	if (devTag) {
 		// Send and forget, deprecations are less important than releasing other dev versions and can be done manually
-		void $`pnpm exec npm-deprecate --name "*dev*" --message "This version is deprecated. Please use a newer version." --package ${release.name}`
+		void $`pnpm exec npm-deprecate --name "*${devTag}*" --message "This version is deprecated. Please use a newer version." --package ${release.name}`
 			.nothrow()
 			// eslint-disable-next-line promise/prefer-await-to-then
 			.then(() => {});
 	}
+
+	// Evil, but I can't think of a cleaner mechanism
+	if (release.name === 'create-discord-bot') {
+		await $`pnpm --filter=create-discord-bot run rename-to-app`;
+		// eslint-disable-next-line require-atomic-updates
+		release.name = 'create-discord-app';
+		await releasePackage(release, dry, devTag, false);
+	}
+
+	return true;
 }

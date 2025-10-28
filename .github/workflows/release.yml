@@ -42,22 +42,29 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      contents: write
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
     if: github.repository_owner == 'discordjs'
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/create-github-app-token@v2
+        id: app-token
         with:
+          app-id: ${{ vars.DISCORDJS_APP_ID }}
+          private-key: ${{ secrets.DISCORDJS_APP_KEY_RELEASE }}
+          permission-contents: write
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ steps.app-token.outputs.token }}
           ref: ${{ inputs.ref || '' }}
-          ssh-key: ${{ secrets.DEPLOY_KEY_CI_RELEASE_TAGS }}
 
       - name: Install Node.js v22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
+          package-manager-cache: false
           registry-url: https://registry.npmjs.org/
 
       - name: Install dependencies
@@ -66,7 +73,35 @@ jobs:
       - name: Build dependencies
         run: pnpm run build
 
-      - name: Release packages
+      - name: Checkout main repository
+        if: ${{ inputs.ref && inputs.ref != 'main' }}
+        uses: actions/checkout@v5
+        with:
+          path: 'main'
+
+      - name: Install action deps (non-main ref only)
+        if: ${{ inputs.ref && inputs.ref != 'main' }}
+        shell: bash
+        working-directory: ./main
+        env:
+          COREPACK_ENABLE_STRICT: 0
+        run: |
+          pnpm self-update 10
+          pnpm install --filter @discordjs/actions --frozen-lockfile --prefer-offline --loglevel error
+
+      - name: Release packages (non-main ref)
+        if: ${{ inputs.ref && inputs.ref != 'main' }}
+        uses: ./main/packages/actions/src/releasePackages
+        with:
+          package: ${{ inputs.package }}
+          exclude: ${{ inputs.exclude }}
+          dry: ${{ inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Release packages (main ref)
+        if: ${{ !inputs.ref || inputs.ref == 'main' }}
         uses: ./packages/actions/src/releasePackages
         with:
           package: ${{ inputs.package }}
@@ -74,4 +109,4 @@ jobs:
           dry: ${{ inputs.dry_run }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
